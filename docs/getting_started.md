@@ -10,206 +10,257 @@ We use Azure DevOps for running our build(CI), retraining trigger and release (C
 
 If you already have Azure DevOps account, create a [new project](https://docs.microsoft.com/en-us/azure/devops/organizations/projects/create-project?view=azure-devops).
 
-#### Enable Azure DevOps Preview
-The steps below uses the latest DevOps features. Thus, please enable the feature **New YAML pipeline creation experience** by following the instructions [here](https://docs.microsoft.com/en-us/azure/devops/project/navigation/preview-features?view=azure-devops). 
 
-**Note:** Make sure you have the right permissions in Azure DevOps to do so.
-
-### 3. Create Service Principal to Login to Azure and create resources
+### 3. Create Service Principal to Login to Azure
 
 To create service principal, register an application entity in Azure Active Directory (Azure AD) and grant it the Contributor or Owner role of the subscription or the resource group where the web service belongs to. See [how to create service principal](https://docs.microsoft.com/en-us/azure/active-directory/develop/howto-create-service-principal-portal) and assign permissions to manage Azure resource.
-Please make note the following values after creating a service principal, we will need them in subsequent steps
-- Azure subscription id (subscriptionid)
-- Service principal username (spidentity)([application id](https://docs.microsoft.com/en-us/azure/active-directory/develop/howto-create-service-principal-portal#get-application-id-and-authentication-key))
-- Service principal password (spsecret) ([auth_key](https://docs.microsoft.com/en-us/azure/active-directory/develop/howto-create-service-principal-portal#get-application-id-and-authentication-key))
-- Service principal [tenant id](https://docs.microsoft.com/en-us/azure/active-directory/develop/howto-create-service-principal-portal#get-tenant-id) (sptenant)
-
-**Note:** You must have sufficient permissions to register an application with your Azure AD tenant, and assign the application to a role in your Azure subscription. Contact your subscription adminstator if you don't have the permissions. Normally a subscription admin can create a Service principal and can provide you the details.
+Please make note of the following values after creating a service principal, we will need them in subsequent steps
+- Application (client) ID
+- Directory (tenant) ID
+- Application Secret
 
 
-### 4. Store secret in Key Vault and link it as variable group in Azure DevOps to be used by piplines.
-Our pipeline require the following variables to autheticate with Azure.
-- spidentity 
-- spsecret
-- sptenant
-- subscriptionid
+**Note:** You must have sufficient permissions to register an application with your Azure AD tenant, and assign the application to a role in your Azure subscription. Contact your subscription administrator if you don't have the permissions. Normally a subscription admin can create a Service principal and can provide you the details.
 
-We noted the value of these variables in previous steps.
 
-**NOTE:** These values should be treated as secret as they allow access to your subscription. 
+### 4. Create a Variable Group
 
-We make use of variable group inside Azure DevOps to store variables and their values that we want to make available across multiple pipelines. You can either store the values directly in [Azure DevOps](https://docs.microsoft.com/en-us/azure/devops/pipelines/library/variable-groups?view=azure-devops&tabs=designer#create-a-variable-group) or connect to an Azure Key Vault in your subscription. Please refer to the documentation [here](https://docs.microsoft.com/en-us/azure/devops/pipelines/library/variable-groups?view=azure-devops&tabs=designer#create-a-variable-group) to learn more about how to create a variable group and [link](https://docs.microsoft.com/en-us/azure/devops/pipelines/library/variable-groups?view=azure-devops&tabs=designer#use-a-variable-group) it to your pipeline.
+We make use of variable group inside Azure DevOps to store variables and their values that we want to make available across multiple pipelines. You can either store the values directly in [Azure DevOps](https://docs.microsoft.com/en-us/azure/devops/pipelines/library/variable-groups?view=azure-devops&tabs=designer#create-a-variable-group) or connect to an Azure Key Vault in your subscription. Please refer to the documentation [here](https://docs.microsoft.com/en-us/azure/devops/pipelines/library/variable-groups?view=azure-devops&tabs=designer#create-a-variable-group) to learn more about how to create a variable group and [link](https://docs.microsoft.com/en-us/azure/devops/pipelines/library/variable-groups?view=azure-devops&tabs=designer#use-a-variable-group) it to your pipeline. Click on **Library** in the **Pipelines** section as indicated below:
+
+![library_variable groups](./images/library_variable_groups.png)
  
-Please name your variable group **``AzureKeyVaultSecrets``**, we are using this name within our build yaml file. 
+Please name your variable group **``devopsforai-aml-vg``** as we are using this name within our build yaml file. 
 
-Up until now you shouls have 
+The variable group should contain the following variables:
+
+| Variable Name               | Suggested Value              |
+| --------------------------- | ---------------------------- |
+| AML_COMPUTE_CLUSTER_CPU_SKU | STANDARD_DS2_V2              |
+| AML_COMPUTE_CLUSTER_NAME    | train-cluster                |
+| BASE_NAME                   | [unique base name]                        |
+| EVALUATE_SCRIPT_PATH        | evaluate/evaluate_model.py   |
+| EXPERIMENT_NAME             | mlopspython                  |
+| LOCATION                    | centralus                    |
+| MODEL_NAME                  | sklearn_regression_model.pkl |
+| REGISTER_SCRIPT_PATH        | register/register_model.py   |
+| SOURCES_DIR_TRAIN           | code                         |
+| SP_APP_ID                   |                              |
+| SP_APP_SECRET               |                              |
+| SUBSCRIPTION_ID             |                              |
+| TENANT_ID                   |                              |
+| TRAIN_SCRIPT_PATH           | training/train.py            |
+| TRAINING_PIPELINE_NAME      | training-pipeline            |
+
+Mark **SP_APP_SECRET** variable as a secret one.
+
+**Note:** The BASE_NAME parameter is used throughout the solution for naming Azure resources. When the solution is used in a shared subscription, there can be naming collisions with resources that require unique names like azure blob storage and registry DNS naming. Make sure to give a unique value to the BASE_NAME variable (e.g. MyUniqueML), so that the created resources will have unique names (e.g. MyUniqueML-AML-RG, MyUniqueML-AML-WS, etc.). The length of the BASE_NAME value should not exceed 10 characters. 
+
+Make sure to select the **Allow access to all pipelines** checkbox in the variable group configuration.
+
+Up until now you should have: 
 - Forked (or cloned) the repo
 - Created a devops account or use an existing one
 - Got service principal details and subscription id
-- Set them as variable group within devops
+- A variable group with all configuration values
 
-We now have 3 pipelines that we would set up
-- **Build Pipeline (azure-pipelines.yml)**: Runs tests and sets up infrastructure 
-- **Retraining trigger pipeline(/template/retraining-template.json)**: This pipeline triggers Azure ML Pipeline (training/retraining) which trains a new model and publishes model image, if new model performs better
-- **Release pipeline(/template/release-template.json)**: This pipeline deploys and tests model image as web service in QA and Prod environment
+### 5. Create resources 
+
+The easiest way to create all required resources (Resource Group, ML Workspace, Container Registry, Storage Account, etc.) is to leverage an "Infrastructure as Code" [pipeline coming in this repository](../environment_setup/iac-create-environment.yml). This **IaC** pipeline takes care of all required resources basing on these [ARM templates](../environment_setup/arm-templates/cloud-environment.json). The pipeline requires an **Azure Resource Manager** service connection:
+
+![create service connection](./images/create-rm-service-connection.png)
+
+Give the connection name **``AzureResourceConnection``** as it is referred by the pipeline definition. Leave the **``Resource Group``** field empty.
+
+In your DevOps project create a build pipeline from your forked **GitHub** repository: 
+
+![build connnect step](./images/build-connect.png)
+
+Refer to an **Existing Azure Pipelines YAML file**: 
+
+![configure step](./images/select-iac-pipeline.png)
+
+Having done that, run the pipeline:
+
+![iac run](./images/run-iac-pipeline.png)
+
+Check out created resources in the [Azure Portal](portal.azure.com):
+
+![created resources](./images/created-resources.png)
+
+Alternatively, you can also use a [cleaning pipeline](../environment_setup/iac-remove-environment.yml) that removes resources created for this project or you can just delete a resource group in the [Azure Portal](portal.azure.com).
+
+Once this resource group is created, be sure that the Service Principal you have created has access to this resource group.
+
+### 6. Set up Build Pipeline
+
+In your [Azure DevOps](https://dev.azure.com) project create and run a new build pipeline refereing to [azdo-ci-build-train.yml](../.pipelines/azdo-ci-build-train.yml) pipeline in your forked **GitHub** repository:
+
+![configure ci build pipeline](./images/ci-build-pipeline-configure.png)
+
+Name the pipeline **ci-build**. Once the pipline is finished, explore the execution logs: 
+
+![ci build logs](./images/ci-build-logs.png)
+
+and checkout a published training pipeline in the **mlops-AML-WS** workspace in [Azure Portal](https://ms.portal.azure.com/):
+
+![training pipeline](./images/training-pipeline.png)
+
+
+Great, you now have the build pipeline setup, you can either manually trigger it or it gets automatically triggered everytime there is a change in the master branch. The pipeline performs linting, unit testing, builds and publishes an **ML Training Pipeline** in an **ML Workspace**
+
+### 7. Train the Model
+
+The next step is to invoke the training pipeline created in the previous step. It can be done with a **Release Pipeline**. Click on the Pipelines/Releases menu, and then **New pipeline**, and then click on "Empty Job" on the "Select a template" window that pops to the right:
+
+![invoke training pipeline](./images/invoke-training-pipeline.png)
+
+An artifact of this pipeline will be the result of the build pipeline **ci-buid**:
+
+![artifact invoke pipeline](./images/artifact-invoke-pipeline.png)
+
+Configure a pipeline to see values from the previously defined variable group **devopsforai-aml-vg**. Click on the "Variable groups", and to the right, click on "Link variable group". From there, pick the **devopsforai-aml-vg** variable group we created in an earlier step, choose "Release" as a variable group scope, and click on "Link":
+
+![retrain pipeline vg](./images/retrain-pipeline-vg.png)
+
+Rename the default "Stage 1" to **Invoke Training Pipeline** and make sure that the **Agent Specification** is **ubuntu-16.04** under the Agent Job:
+
+![agent specification](./images/agent-specification.png)
+
+Add a **Command Line Script** step, rename it to **Run Training Pipeline** with the following script:
+
+```bash
+docker run -v $(System.DefaultWorkingDirectory)/_ci-build/mlops-pipelines/ml_service/pipelines:/pipelines \
+ -w=/pipelines -e MODEL_NAME=$MODEL_NAME -e EXPERIMENT_NAME=$EXPERIMENT_NAME \
+ -e TENANT_ID=$TENANT_ID -e SP_APP_ID=$SP_APP_ID -e SP_APP_SECRET=$(SP_APP_SECRET) \
+ -e SUBSCRIPTION_ID=$SUBSCRIPTION_ID -e RELEASE_RELEASEID=$RELEASE_RELEASEID \
+ -e BUILD_BUILDID=$BUILD_BUILDID -e BASE_NAME=$BASE_NAME \
+mcr.microsoft.com/mlops/python:latest python run_train_pipeline.py
+```
+
+as in the screen shot below, leaving all other fields to their default value:
+
+![Run Training Pipeline Task](./images/run_training_pipeline_task.png)
+
+Now, add the automation to trigger a run of this pipeline whenever the **ci_build** build is completed, click on the lightning bolt icon on the top right of the **\_ci-build** artifact is selected, and enable the automatic release :
+
+![automate_infoke_training_pipeline](./images/automate_infoke_training_pipeline.png)
+
+This release pipeline should now be automatically triggered (continuous deployment) whenever a new **ML training pipeline** is published by the **ci-build builder pipeline**. It can also be triggered manually or configured to run on a scheduled basis. Create a new release to trigger the pipeline manually by clicking on the "Create release" button on the top right of your screen, when selecting this new build pipeline:
+
+![create release](./images/create-release.png)
+
+Leave the fields empty and click on "create". Once the release pipeline is completed, check out in the **ML Workspace** that the training pipeline is running: 
+
+![running training pipeline](./images/running-training-pipeline.png)
+
+The training pipeline will train, evaluate and register a new model. Wait until it is fininshed and make sure there is a new model in the **ML Workspace**:
+
+![trained model](./images/trained-model.png)
+
+Good! Now we have a trained model.
+
+### 8. Deploy the Model
+
+The final step is to deploy the model across environments with a release pipeline. There will be a **``QA``** environment running on [Azure Container Instances](https://azure.microsoft.com/en-us/services/container-instances/) and a **``Prod``** environment running on [Azure Kubernetes Service](https://azure.microsoft.com/en-us/services/kubernetes-service). This is the final picture of what your release pipeline should look like:
+
+![deploy model](./images/deploy-model.png)
+
+
+This pipeline leverages the **Azure Machine Learning** extension that should be installed in your organization from the [marketplace](https://marketplace.visualstudio.com/items?itemName=ms-air-aiagility.vss-services-azureml).
+
+The pipeline consumes two artifacts: the result of the **Build Pipeline** as it contains configuration files and the **model** trained and registered by the ML training pipeline. 
+
+Add the **\_ci-build** artifact using the same process as what we did in the previous step. 
+
+In order to configure a model artifact there should be a service connection to **mlops-AML-WS** workspace. To get there, go to the project settings (by clicking on the cog wheel to the bottom left of the screen), and then click on **Service connections** under the **Pipelines** section:
+
+**Note:** Creating service connection using Azure Machine Learning extension requires 'Owner' or 'User Access Administrator' permissions on the Workspace.
+
+![workspace connection](./images/workspace-connection.png)
+
+Add an artifact to the pipeline and select **AzureML Model Artifact** source type. Select the **Service Endpoint** and **Model Names** from the drop down lists. **Service Endpoint** refers to the **Service connection** created in the previous step:
+
+![model artifact](./images/model-artifact.png)
+
+Go to the new **Releases Pipelines** section, and click new to create a new release pipeline. A first stage is automatically created and choose **start with an Empty job**. Name the stage **QA (ACI)** and add a single task to the job **Azure ML Model Deploy**. Make sure that the Agent Specification is ubuntu-16.04 under the Agent Job: 
+
+![deploy aci](./images/deploy-aci.png)
+
+Specify task parameters as it is shown in the table below:
+
+
+| Parameter                     | Value                                                                                                |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Display Name                  | Azure ML Model Deploy                                                                                |
+| Azure ML Workspace            | mlops-AML-WS                                                                                         |
+| Inference config Path         | `$(System.DefaultWorkingDirectory)/_ci-build/mlops-pipelines/code/scoring/inference_config.yml`      |
+| Model Deployment Target       | Azure Container Instance                                                                             |
+| Deployment Name               | mlopspython-aci                                                                                      |
+| Deployment Configuration file | `$(System.DefaultWorkingDirectory)/_ci-build/mlops-pipelines/code/scoring/deployment_config_aci.yml` |
+| Overwrite existing deployment | X                                                                                                    |
+
+
+In a similar way create a stage **Prod (AKS)** and add a single task to the job **Azure ML Model Deploy**. Make sure that the Agent Specification is ubuntu-16.04 under the Agent Job: 
+
+![deploy aks](./images/deploy-aks.png)
+
+Specify task parameters as it is shown in the table below:
+
+| Parameter                         | Value                                                                                                |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Display Name                      | Azure ML Model Deploy                                                                                |
+| Azure ML Workspace                | mlops-AML-WS                                                                                         |
+| Inference config Path             | `$(System.DefaultWorkingDirectory)/_ci-build/mlops-pipelines/code/scoring/inference_config.yml`      |
+| Model Deployment Target           | Azure Kubernetes Service                                                                             |
+| Select AKS Cluster for Deployment | YOUR_DEPLOYMENT_K8S_CLUSTER                                                                          |
+| Deployment Name                   | mlopspython-aks                                                                                      |
+| Deployment Configuration file     | `$(System.DefaultWorkingDirectory)/_ci-build/mlops-pipelines/code/scoring/deployment_config_aks.yml` |
+| Overwrite existing deployment     | X                                                                                                    |
+
+Similarly to the **Invoke Training Pipeline** release pipeline, previously created, in order to trigger a coutinuous integration, click on the lightning bolt icon, make sure the **Continuous deployment trigger** is checked and save the trigger:
+
+![Automate Deploy Model Pipeline](./images/automate_deploy_model_pipeline.png)
+
+**Note:** Creating of a Kubernetes cluster on AKS is out of scope of this tutorial, so you should take care of it on your own.
+
+**Deploy trained model to Azure Web App for containers**
+
+Note: This is an optional step and can be used only if you are deploying your scoring service on Azure Web Apps.
+
+[Create Image Script](../ml_service/util/create_scoring_image.py)
+can be used to create a scoring image from the release pipeline. Image created by this script will be registered under Azure Container Registry (ACR) instance that belongs to Azure Machine Learning Service. Any dependencies that scoring file depends on can also be packaged with the container with Image config. To learn more on how to create a container with AML SDK click [here](https://docs.microsoft.com/en-us/python/api/azureml-core/azureml.core.image.image.image?view=azure-ml-py#create-workspace--name--models--image-config-).
+
+Below is release pipeline with two tasks one to create an image using the above script and second is the deploy the image to Web App for containers  
+![release_webapp](./images/release-webapp-pipeline.PNG)
+
+For the bash script task to invoke the [Create Image Script](../ml_service/util/create_scoring_image.py), specify the following task parameters:
+
+| Parameter          | Value                                                                                               |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| Display Name       | Create Scoring Image                                                                                |
+| Script             | python3 $(System.DefaultWorkingDirectory)/\_MLOpsPythonRepo/mlservice/util/create_scoring_image.py  |
+
+Finally 
+![release_createimage](./images/release-task-createimage.PNG)
+
+Finally for the Azure WebApp on Container Task, specify the following task parameters as it is shown in the table below:
+
+
+| Parameter          | Value                                                                                               |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| Azure subscription | Subscription used to deploy Web App                                                                 |
+| App name           | Web App for Containers name                                                                         |
+| Image name         | Specify the fully qualified container image name. For example, 'myregistry.azurecr.io/nginx:latest' |
+
+![release_webapp](./images/release-task-webappdeploy.PNG)
+
+
+Save the pipeline and create a release to trigger it manually. To create the trigger, click on the "Create release" button on the top right of your screen, leave the fields blank and click on **Create** at the bottom of the screen. Once the pipeline execution is finished, check out deployments in the **mlops-AML-WS** workspace.
 
 
 
-### 5. Set up Build Pipeline
-1. Select your devops organization and project by clicking dev.azure.com
-2. Once you are in the right devops project, click Pipelines on the left hand menu and select Builds
-3. Click **New pipeline** to create new pipeline
-   ![new build pipeline](./images/new-build-pipeline1.png)   
-4. On the Connect option page, select **GitHub**
-   ![build connnect step](./images/build-connect.png)
-   
-5. On the Select option page, select the GitHub repository where you forked the code.
-![select repo](./images/build-selectrepo.png)
-
-6. Authorize Azure Pipelines to access your git account
-![select repo](./images/Install_Azure_pipeline.png)
-
-7. Since the repository contains azure-pipelines.yml at the root level, Azure DevOps recognizes it and auto imports it. Click **Run** and this will start the build pipeline.
-![select repo](./images/build-createpipeline1.png) 
-
-8. Your build run would look similar to the following image
-![select repo](./images/build-run.png)
-
-Great, you now have the build pipeline setup, you can either manually trigger it or it gets automatically triggered everytime there is a change in the master branch.
-
-
-**Note:** The build pipeline will perform basic test on the code and provision infrastructure on azure. This can take around 10 mins to complete.
-
-### 6. Set up Retraining trigger release pipeline
-
-**Note:** For setting up release pipelines, first download the [release-pipelines](../release-pipelines) to your local filesystem so you can import it.
-
-**Also Note:** If this is the first time you are creating a release pipeline, you would see the following option, click on **New Pipeline**
-![import release pipeline](./images/release-new-pipeline.png)
-
-To enable the option to **Import release pipeline**, we must have atleast one release pipeline so let's create one with an empty job.
-![import release pipeline](./images/release-empty-job.png)
-
-On the next screen, click on **Save** and then click **Ok** to save the empty release pipeline.
-![import release pipeline](./images/release-save-empty.png)
-
-**Steps**
-
-1. Select the Release tab from the menu on the left, then click the New dropdown on top and click on **Import Release pipeline**
-![import release pipeline](./images/release-import.png)
-
-1. On the next screen, navigate to **release-pipelines** folder and select **retrainingtrigger.json** pipeline file, click import. You should now see the following screen. Under Stages click on the Retrain stage, where it shows the red error sign.
-![release retraining triggger](./images/release-retrainingtrigger.png)
-
-    Click on agent job and then from the drop down for Agent Pool on the right side select **Hosted Ubuntu 1604** agent to execute your run and click **Save** button on top right.
-![release retraining agent](./images/release-retrainingagent.png)
-
-1. We would now link the variable group we created earlier to this release pipeline. To do so click on the **Variables** tab, then click on **Variable** groups and then select **Link variable group** and select the variable group that we created in previous step and click **Link** followed by **Save** button.
-![release retraining artifact](./images/release-link-vg.png)
-1. We want the retraining pipeline to be triggered every time build pipeline is complete. To create this dependency, we will link the artifact from build pipeline as a trigger for retraining trigger release pipeline. To do so, click on the **pipeline** tab and then select **Add an artifact** option under Artifacts.
-![release pipeline view](./images/release-retrainingpipeline.png)
-
-1. This will open up a pop up window, on this screen:
-    - for source type, select **Build**
-    - for project, select your project in Azure DevOps that you created in previous steps.
-    - For Source select the source build pipeline. If you have forked the git repo, the build pipeline may named ``yourgitusername.MLOpsPython``
-    - In the Source alias, replace the auto-populated value with 
-    **``DevOpsForAI``**
-    - Field **Default version** will get auto populated **Latest**, you can leave them as it is.
-    - Click on **Add**, and then **Save** the pipeline
-  ![release retraining artifact](./images/release-retrainingartifact.png)
-
-1. Artifact is now added for retraining trigger pipeline, hit the **save** button on top right and then click **ok**. 
-
-1. To trigger this pipeline every time build pipeline executes, click on the lighting sign to enable the **Continous Deployment Trigger**, click **Save**.
-    ![release retraining artifact](./images/release-retrainingtrigger1.png)
+Congratulations! You have three pipelines set up end to end:
+   - Build pipeline: triggered on code change to master branch on GitHub, performs linting, unit testing and publishing a training pipeline
+   - Release Trigger pipeline: runs a published training pipeline to train, evaluate and register a model
+   - Release Deployment pipeline: deploys a model to QA (ACI) and Prod (AKS) environments
     
-2. If you want to run this pipeline on a schedule, you can set one by clicking on **Schedule set** in Artifacts section.
-![release retraining artifact](./images/release-retrainingartifactsuccess.png)
-
-1. For the first time, we will manually trigger this pipeline.
-   - Click Releases option on the left hand side and navigate to the release pipeline you just created.
-  ![release retraining artifact](./images/release-createarelease.png)
-   - Click **Create Release**
-  ![release create ](./images/release-create.png)
-   - On the next screen click on **Create** button, this creates a manual release for you.
-
-  **Note**: This release pipeline will call the published AML pipeline. The AML pipeline will train the model and package it into image. It will take around 10 mins to complete. The next steps need this pipeline to complete successfully. At this point, you can go to the Azure Portal AML WOrkspace resource created inside resource group "DevOps_AzureML_Demo" and click on the **Pipeline** tab to see the running pipeline.
-
-### 7. Set up release (Deployment) pipeline
-
-**Note:** For setting up release pipelines, first download the [release-pipelines](../release-pipelines) to your local filesystem so you can import it. 
-
-**Also Note:** Before creating this pipeline, make sure that the build pipeline, retraining trigger release pipeline and AML retraining pipeline have been executed, as they will be creating resources during their run like docker images that we will deploy as part of this pipeline. So it is important for them to have successful runs before the setup here. 
-
-Let's set up the release deployment pipeline now.
-1. As done in previous step, Select the Release tab from the menu on the left, then click the New dropdown on top and click on **Import Release pipeline**
-![import release pipeline](./images/release-import.png)
-
-1. On the next screen, navigate to **release-pipelines** folder and select **releasedeployment.json** pipeline file, click import. You should now see the following screen. Under Stages click on the QA environment's **view stage task", where it shows the red error sign.
-![release retraining triggger](./images/release-deployment.png)
-
-    Click on agent job and then from the drop down for Agent Pool on the right side select **Hosted Ubuntu 1604** agent to execute your run and click **Save** button on top right.
-![release retraining agent](./images/release-deploymentqaagent.png)
-
-   Follow the same steps for **Prod Environment** and select **Hosted Ubuntu 1604** for agent pool and save the pipeline.
-   ![release retraining agent](./images/release-deploymentprodagent.png)
-
-1. We would now link the variable group we created earlier to this release pipeline. To do so click on the **Variables** tab, then click on **Variable** groups and then select **Link variable group** and select the variable group that we created in previous step and click **Link** followed by **Save** button.
-![release retraining artifact](./images/release-link-vg.png)
-
-1. We now need to add artifact that will trigger this pipeline. We will add two artifacts:
-      - Build pipeline output as artifact since that contains our configuration and code files that we require in this pipeline.
-      - ACR artifact to trigger this pipeline everytime there is a new image that gets published to Azure container registry (ACR) as part of retraining pipeline. 
-
-   Here are the steps to add build output as artifact
-
-   - Click on pipeline tab to go back to pipeline view and click **Add an artifact**. This will open a pop up window
-    - for source type, select **Build**
-    - for project, select your project in Azure DevOps that you created in previous steps.
-    - For Source select the source build pipeline. If you have forked the git repo, the build pipeline may named ``yourgitusername.DevOpsForAI``
-    - In the Source alias, replace the auto-populated value with 
-    **``DevOpsForAI``**
-    - Field **Devault version** will get auto populated **Latest**, you can leave them as it is.
-    - Click on **Add**, and then **Save** the pipeline
-  ![release retraining artifact](./images/release-retrainingartifact.png)
-
-   **Here are the steps to add [Azure ML Model as an artifact](https://marketplace.visualstudio.com/items?itemName=ms-air-aiagility.vss-services-azureml)**
-
-
-    - Install the Azure Machine Learning extension for your DevOps organization from [here](https://marketplace.visualstudio.com/items?itemName=ms-air-aiagility.vss-services-azureml). You need to have admin rights to install it.
-
-    - Create Service Connection
-    1. Go to your DevOps project and click on Project settings on bottom left corner
-    2. Under Project Settings -> Pipelines, click on Service connections, click on "New service connection" and select Azure Resource Manager
-    ![release retraining agent](./images/service-connection.png)
-    
-    3. Provide following info and click Ok once done:
-    ![release retraining agent](./images/service-connection-add.png)
-    
-       
-    - Click on pipeline tab to go back to pipeline view and click **Add an artifact**. This will open a pop up window
-    - For Source type, click on **more artifact types** dropdown and select **AzureML Model Artifact**
-    - For **Service Endpoint**, select an existing endpoint **MLOpsPython**, if you don't see anything in the dropdown, click on **Manage** and [create new **Azure Resource Manager**](https://docs.microsoft.com/en-us/azure/devops/pipelines/library/service-endpoints?view=azure-devops#create-a-service-connection) service connection for your subscription.
-    ![release retraining agent](./images/model-artifact.png)
-    **Note:** You must have sufficient privileges to create a service connection, if not contact your subscription adminstrator.
-    - For Model Names, select **sklearn_regression_model.pkl**, this is the name of the newly trained model and if the previous pipelines executed properly you will see this model name in the drop down.
-    - For Default version, keep it to **Latest version**  
-    - For Source alias, keep the default generated name.
-    - Click Add
-    - Click on lighting sign to enable the **Continous Deployment Trigger**, click **Save**.
-    ![release retraining artifact](./images/model-artifact-cd-trigger.png)
-
-
-1. We now have QA environment continously deployed each time there is a new ml model registered in AML Model Management. You can select pre-deployment conditions for prod environment, normally you don't want it to be auto deployed, so select manual only trigger here.
-
-    ![release retraining artifact](./images/release-deploymentprodtrigger.png)
-
-    To deploy a release manually, follow the document [here](https://docs.microsoft.com/en-us/azure/devops/pipelines/get-started-designer?view=azure-devops&tabs=new-nav#deploy-a-release)
-
-
-Congratulations, you now have three pipelines set up end to end.
-   - Build pipeline: triggered on code change to master branch on GitHub.
-   - Release Trigger pipeline: triggered on build pipeline execution and registers a new ML model to AML Model Management if better than previous one.
-   - Release Deployment pipeline: QA environment is auto triggered when there is a new model.
-    Prod is manual only and user decides when to release to this environment.
