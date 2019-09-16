@@ -34,6 +34,7 @@ steps:
     Contents: |
       ml_service/pipelines/?(run_train_pipeline.py|*.json)
       code/scoring/**
+      ml_service/util/**
 
 
 - task: PublishBuildArtifacts@1
