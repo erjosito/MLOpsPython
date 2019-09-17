@@ -14,7 +14,6 @@ WORKSPACE_NAME = os.environ.get("BASE_NAME")+"-AML-WS"
 SUBSCRIPTION_ID = os.environ.get('SUBSCRIPTION_ID')
 RESOURCE_GROUP = os.environ.get("BASE_NAME")+"-AML-RG"
 MODEL_NAME = os.environ.get('MODEL_NAME')
-MODEL_VERSION = os.environ.get('MODEL_VERSION')
 IMAGE_NAME = os.environ.get('IMAGE_NAME')
 
 
@@ -31,7 +30,7 @@ ws = Workspace.get(
 )
 
 
-model = Model(ws, name=MODEL_NAME, version=MODEL_VERSION)
+model = Model(ws, name=MODEL_NAME)
 os.chdir("./code/scoring")
 
 image_config = ContainerImage.image_configuration(
